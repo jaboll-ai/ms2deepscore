@@ -15,7 +15,8 @@ from ms2deepscore.SettingsMS2Deepscore import (
     SettingsMS2Deepscore,
 )
 from ms2deepscore.models.io_utils import _settings_to_json
-
+# monkey patch
+from NletSpectralModel import NletSpectralModel
 
 # ---------- internal helpers ----------
 
@@ -123,7 +124,7 @@ def _load_model_generic(
     allow_legacy: bool,
     convert_legacy_to: Optional[Union[str, Path]],
     settings_factory: Callable[[Dict[str, Any]], Any],
-    model_factory: Callable[[Any], Module],
+    model_factory: Callable[[Any, str], Module],
 ) -> Module:
     """
     Shared loader:
@@ -141,7 +142,7 @@ def _load_model_generic(
         state_dict = _extract_state_dict(ckpt)
 
         settings = settings_factory(params)
-        model = model_factory(settings)
+        model = model_factory(settings, ckpt.get("model_class", "SiameseSpectralModel"))
         model.load_state_dict(state_dict)
         model.eval()
         return model
@@ -173,7 +174,7 @@ def _load_model_generic(
             raise TypeError("Unrecognized legacy checkpoint structure.") from err
 
         settings = settings_factory(params)
-        model = model_factory(settings)
+        model = model_factory(settings, legacy_obj.get("model_class", "SiameseSpectralModel"))
         model.load_state_dict(state_dict)
         model.eval()
 
@@ -195,12 +196,16 @@ def load_model(
     """
     Load a SiameseSpectralModel (safe-first, legacy-optional).
     """
+    factories = {
+        "NletSpectralModel": NletSpectralModel,
+        "SiameseSpectralModel": SiameseSpectralModel,
+    }
     return _load_model_generic(
         filename,
         allow_legacy=allow_legacy,
         convert_legacy_to=convert_legacy_to,
         settings_factory=lambda params: SettingsMS2Deepscore(**params, validate_settings=False),
-        model_factory=lambda settings: SiameseSpectralModel(settings=settings),
+        model_factory=lambda settings, model_class: factories.get(model_class, SiameseSpectralModel)(settings=settings)
     )  # type: ignore[return-value]
 
 
@@ -218,7 +223,7 @@ def load_embedding_evaluator(
         allow_legacy=allow_legacy,
         convert_legacy_to=convert_legacy_to,
         settings_factory=lambda params: SettingsEmbeddingEvaluator(**params),
-        model_factory=lambda settings: EmbeddingEvaluationModel(settings=settings),
+        model_factory=lambda settings, model_class: EmbeddingEvaluationModel(settings=settings),
     )  # type: ignore[return-value]
 
 
