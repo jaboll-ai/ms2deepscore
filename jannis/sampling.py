@@ -1,4 +1,4 @@
-from collections import Counter, defaultdict
+from collections import Counter
 import heapq
 from typing import List, Union
 from matchms import Spectrum
@@ -11,9 +11,6 @@ from pathlib import Path
 
 from tqdm import tqdm
 
-from SpectrumNletGenerator import SpectrumNletGenerator
-from SelectedNletSchedule import SelectedNletSchedule, load_selected_nlet_schedule, save_selected_nlet_schedule, selected_nlet_schedule_exists
-from ms2deepscore.SettingsMS2Deepscore import SettingsMS2Deepscore
 from ms2deepscore.fingerprint_similarity_computations import (
     compute_fingerprint_similarity_matrix,
     compute_tanimoto_similarity_per_bin,
@@ -31,6 +28,9 @@ from ms2deepscore.train_new_model.pair_data_persistence import (
     save_candidate_pair_data,
     spectra_structure_signature,
 )
+from SpectrumNletGenerator import SpectrumNletGenerator
+from SelectedNletSchedule import SelectedNletSchedule, load_selected_nlet_schedule, save_selected_nlet_schedule, selected_nlet_schedule_exists
+from ms2deepscore.SettingsMS2Deepscore import SettingsMS2Deepscore
 
 def build_candidate_data_manifest(
     *,

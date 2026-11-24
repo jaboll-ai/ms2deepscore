@@ -1,27 +1,72 @@
-import os
 from pathlib import Path
-from typing import Union
 
-import numpy as np
+from ms2deepscore.SettingsMS2Deepscore import SettingsEmbeddingEvaluator, SettingsMS2Deepscore
 
-from jannis.model import SpectralNletModel
-from ms2deepscore.SettingsMS2Deepscore import SettingsMS2Deepscore
-from ms2deepscore.models.SiameseSpectralModel import train
-from ms2deepscore.train_new_model import TrainingBatchGenerator
-from ms2deepscore.train_new_model.inchikey_pair_selection import create_spectrum_pair_generator
-from ms2deepscore.train_new_model.inchikey_pair_selection_cross_ionmode import create_data_generator_across_ionmodes, select_compound_pairs_wrapper_across_ionmode
-from ms2deepscore.train_new_model.pair_data_persistence import _jsonable, prepare_pair_data_folder, spectra_structure_signature
-from ms2deepscore.utils import split_by_ionmode
-from ms2deepscore.validation_loss_calculation.ValidationLossCalculator import ValidationLossCalculator
-from ms2deepscore.wrapper_functions.training_wrapper_functions import (
-    load_spectra_in_ionmode,
-    split_data_if_necessary,
-)
+from nlet_training_wrapper import train_nlet_ms2deepscore_wrapper
 
-NLET_DATA_FORMAT_VERSION = 1
-spectrum_file = "./20241003_enamdisc_neg_ms2.mgf"
+def num2tuple(n: int) -> str:
+    names = {
+        1: "singlet",
+        2: "doublet",
+        3: "triplet",
+        4: "quadruplet",
+        5: "quintuplet",
+        6: "sextuplet",
+        7: "septuplet",
+        8: "octuplet",
+        9: "nonuplet",
+        10: "decuplet",
+        11: "undecuplet",
+        12: "duodecuplet",
+    }
+    return names.get(n, f"{n}-tuple")
+
+RANDOM_SEED = 16
+N = 4
+STRATEGY = [0, 0, 0, 1, 0, 1, 0, 1, 0, 0]
+NUM_EPOCHS = 250
+SPECTRUM_FILE = Path("./runs/merged_and_cleaned_libraries_1.mgf")
+OUTPUT_DIR = Path(f"./runs/{num2tuple(N)}-e{NUM_EPOCHS}-")
+PAIR_CACHE_DIR = Path("./runs/nlet_cache")
+
 settings = SettingsMS2Deepscore(
-    spectrum_file_path=spectrum_file,
+    # Dataset
+    spectrum_file_path=str(SPECTRUM_FILE),
+    results_folder="./trained_models",
+    # training_spectra_file_name="./trained_models/train_merged_and_cleaned_libraries_1.mgf",
+    # validation_spectra_file_name="./trained_models/val_merged_and_cleaned_libraries_1.mgf",
+    # test_spectra_file_name="./trained_models/test_merged_and_cleaned_libraries_1.mgf",
+    train_test_split_fraction=20,
+
+    # Model architecture
+    base_dims=[10000],
+    embedding_dim=500,
+    ionisation_mode="both",
+    activation_function="relu",
+    train_binning_layer=False,
+    train_binning_layer_group_size=20,
+    train_binning_layer_output_per_group=2,
+    dropout_rate=0.0,
+
+    # Training
+    learning_rate=0.00025,
+    epochs=NUM_EPOCHS,
+    patience=20,
+    loss_function="mse",
+    weighting_factor=0,
+    batch_size=32,
+    num_turns=1,
+    shuffle=True,
+    use_fixed_set=False,
+    random_seed=RANDOM_SEED,
+
+    # Spectrum preprocessing
+    min_mz=10,
+    max_mz=1000,
+    mz_bin_width=0.1,
+    intensity_scaling=0.5,
+
+    # Metadata encoders
     additional_metadata=[
         (
             "CategoricalToBinary",
@@ -33,155 +78,72 @@ settings = SettingsMS2Deepscore(
         ),
         (
             "StandardScaler",
-            {"metadata_field": "precursor_mz", "mean": 0, "standard_deviation": 1000},
+            {
+                "metadata_field": "precursor_mz",
+                "mean": 0,
+                "standard_deviation": 1000,
+            },
         ),
     ],
-    ionisation_mode="negative",
-    random_seed=42,
-    epochs=5,
+
+    # Compound sampling
+    average_inchikey_sampling_count=100,
+    max_inchikey_sampling=110,
+    max_pairs_per_bin=300,
+    same_prob_bins=[
+        (0.8, 0.9),
+        (0.7, 0.8),
+        (0.9, 1.0),
+        (0.6, 0.7),
+        (0.5, 0.6),
+        (0.4, 0.5),
+        (0.3, 0.4),
+        (0.2, 0.3),
+        (0.1, 0.2),
+        (-0.01, 0.1),
+    ],
+    include_diagonal=True,
+    max_pair_resampling=10_000_000,
+
+    # Fingerprints
+    fingerprint_type="daylight",
+    fingerprint_nbits=4096,
+
+    # Validation
+    val_spectra_per_inchikey=1,
+
+    # Data augmentation
+    augment_removal_max=0.2,
+    augment_removal_intensity=0.2,
+    augment_intensity=0.2,
+    augment_noise_max=10,
+    augment_noise_intensity=0.02,
 )
 
-split_data_if_necessary(settings)
-
-training_spectra = load_spectra_in_ionmode(
-    settings.training_spectra_file_name, settings.ionisation_mode
+embedding_settings = SettingsEmbeddingEvaluator(
+    evaluator_distribution_size=1000,
+    evaluator_num_filters=48,
+    evaluator_depth=3,
+    evaluator_kernel_size=20,
+    random_seed=RANDOM_SEED,
+    mini_batch_size=100,
+    batches_per_iteration=1000,
+    learning_rate=0.0001,
+    num_epochs=5,
 )
 
-validation_spectra = load_spectra_in_ionmode(
-    settings.validation_spectra_file_name, settings.ionisation_mode
-)
+RUN_NAME = f"{num2tuple(N)}-training-b{settings.batch_size}-ion_{settings.ionisation_mode}"
 
-def build_nlet_data_manifest(
-    *,
-    kind: str,
-    settings,
-    spectra_signature_1: str,
-    spectra_signature_2: str | None = None,
-    n_let_size: int = 3,
-) -> dict:
-    """Build the manifest describing exactly which persisted N-let data is valid."""
-    candidate_settings = {
-        "fingerprint_type": settings.fingerprint_type,
-        "fingerprint_nbits": settings.fingerprint_nbits,
-        "max_pairs_per_bin": settings.max_pairs_per_bin,
-        "same_prob_bins": np.asarray(settings.same_prob_bins).tolist(),
-        "include_diagonal": settings.include_diagonal if kind == "within_set" else False,
-        "random_seed": settings.random_seed,
-        "n_let_size": n_let_size,
-    }
-    balancing_settings = {
-        "average_inchikey_sampling_count": settings.average_inchikey_sampling_count,
-        "max_inchikey_sampling": settings.max_inchikey_sampling,
-        "max_pair_resampling": settings.max_pair_resampling,
-    }
 
-    manifest = {
-        "format_version": NLET_DATA_FORMAT_VERSION,
-        "kind": kind,
-        "spectra_signature_1": spectra_signature_1,
-        "candidate_settings": candidate_settings,
-        "balancing_settings": balancing_settings,
-    }
-    if spectra_signature_2 is not None:
-        manifest["spectra_signature_2"] = spectra_signature_2
-    return _jsonable(manifest)
-
-def create_data_generator_across_ionmodes(
-    training_spectra,
-    settings: SettingsMS2Deepscore,
-    pair_data_folder: Union[str, Path, None] = None,
-    n_let_size: int = 3,
-) -> TrainingBatchGenerator:
-    """Create balanced positive, negative and cross-ionmode training generators.
-
-    When ``pair_data_folder`` is given, explicit subfolders ``positive``,
-    ``negative`` and ``positive_negative`` are used for persisted pair data.
-    """
-    pos_spectra, neg_spectra = split_by_ionmode(training_spectra)
-
-    base_folder = Path(pair_data_folder) if pair_data_folder is not None else None
-    if base_folder is not None:
-        # A top-level manifest makes the folder layout explicit and prevents accidentally
-        # reusing a folder that was previously prepared for single/within-set training.
-        layout_manifest = build_nlet_data_manifest(
-            kind="balanced_across_ionmodes",
-            settings=settings,
-            spectra_signature_1=spectra_structure_signature(training_spectra),
-            n_let_size=n_let_size,
-        )
-        prepare_pair_data_folder(base_folder, layout_manifest)
-
-    pos_folder = base_folder / "positive" if base_folder is not None else None
-    neg_folder = base_folder / "negative" if base_folder is not None else None
-    cross_folder = base_folder / "positive_negative" if base_folder is not None else None
-
-    pos_spectrum_pair_generator = create_spectrum_pair_generator(
-        pos_spectra, settings=settings, pair_data_folder=pos_folder
-    )
-    neg_spectrum_pair_generator = create_spectrum_pair_generator(
-        neg_spectra, settings=settings, pair_data_folder=neg_folder
-    )
-    pos_neg_spectrum_pair_generator = select_compound_pairs_wrapper_across_ionmode(
-        pos_spectra, neg_spectra, settings, pair_data_folder=cross_folder
-    )
-
-    spectrum_pair_generator = CombinedSpectrumGenerator(
-        [pos_spectrum_pair_generator, neg_spectrum_pair_generator, pos_neg_spectrum_pair_generator]
-    )
-
-    train_generator = TrainingBatchGenerator(
-        spectrum_pair_generator=spectrum_pair_generator, settings=settings
-    )
-    return train_generator
-
-def train_ms2ds_model(
-        training_spectra,
-        validation_spectra,
-        results_folder,
-        settings: SettingsMS2Deepscore,
-        pair_data_folder: Union[str, Path, None] = None,
-        n_let_size: int =3,
-        ):
-    """Full workflow to train a MS2DeepScore model.
-
-    ``pair_data_folder`` is an explicit persistence/reuse location for the expensive
-    training-pair preparation. Reusing the same folder skips pair preparation only
-    when its manifest matches the current structural data and pair-selection settings.
-    """
-    # Make folder and save settings
-    os.makedirs(results_folder, exist_ok=True)
-    settings.save_to_file(os.path.join(results_folder, "settings.json"))
-    if settings.balanced_sampling_across_ionmodes:
-        train_generator = create_data_generator_across_ionmodes(
-            training_spectra, settings=settings, pair_data_folder=pair_data_folder,
-            n_let_size=n_let_size,
-        )
-    else:
-        spectrum_pair_generator = create_spectrum_pair_generator(
-            training_spectra, settings=settings, pair_data_folder=pair_data_folder,
-            n_let_size=n_let_size
-        )
-        train_generator = TrainingBatchGenerator(spectrum_pair_generator=spectrum_pair_generator, settings=settings)
-    # Create a validation loss calculator
-    validation_loss_calculator = ValidationLossCalculator(validation_spectra,
-                                                          settings=settings)
-
-    model = SpectralNletModel(settings=settings)
-
-    output_model_file_name = os.path.join(results_folder, settings.model_file_name)
-
-    history = train(model,
-                    train_generator,
-                    num_epochs=settings.epochs,
-                    learning_rate=settings.learning_rate,
-                    validation_loss_calculator=validation_loss_calculator,
-                    patience=settings.patience,
-                    loss_function=settings.loss_function,
-                    checkpoint_filename=output_model_file_name, lambda_l1=0, lambda_l2=0)
-    model.export_to_onnx(results_folder)
-
-    return model, history
-
-model, history = train_ms2ds_model(
-    training_spectra, validation_spectra, settings.model_directory_name, settings
+train_nlet_ms2deepscore_wrapper(
+    settings=settings,
+    n=N,
+    strategy=STRATEGY,
+    output_dir=OUTPUT_DIR,
+    pair_data_folder=PAIR_CACHE_DIR,
+    settings_embedding_evaluator=embedding_settings,
+    early_stopping=False,
+    run_benchmark=False,
+    trackio_project="ms2deepscore-nlet",
+    trackio_run_name=RUN_NAME,
 )
