@@ -55,3 +55,6 @@ namespaces = false
 
 [tool.setuptools.dynamic]
 version = { attr = "ms2deepscore.__version__.__version__" }
+
+[tool.pyright]
+typeCheckingMode = "off"

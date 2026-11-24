@@ -196,7 +196,7 @@ def determine_nr_of_pairs_per_bin(settings, nr_of_inchikeys):
     Parameters:
     -----------
     settings:
-        Settings object containing configuration options. 
+        Settings object containing configuration options.
         Required attributes:
             - average_inchikey_sampling_count: The desired average number of inchikeys selected
             - same_prob_bins: The probability bins used

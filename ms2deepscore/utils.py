@@ -5,6 +5,7 @@ import numba
 import numpy as np
 from matchms import Spectrum
 from matchms.importing import load_spectra
+from matchms.filtering import derive_inchikey_from_inchi
 from tqdm import tqdm
 
 
@@ -48,7 +49,7 @@ def remove_diagonal(matrix):
     """Removes the diagonal from a square matrix.
     """
     nrows, ncols = matrix.shape
-    
+
     if nrows != ncols:
         raise ValueError("Expected a square matrix")
 

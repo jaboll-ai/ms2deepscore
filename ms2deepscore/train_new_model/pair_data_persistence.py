@@ -281,6 +281,7 @@ def save_candidate_pair_data(
     available_pairs_per_bin_matrix: np.ndarray,
     available_scores_per_bin_matrix: np.ndarray,
     inchikeys14_unique: Sequence[str],
+    fingerprints: np.ndarray,
 ) -> None:
     """Persist candidate pairs/scores in a compact CSR-like representation per bin.
 
@@ -292,9 +293,14 @@ def save_candidate_pair_data(
         raise ValueError("Candidate pair and score matrices must have identical shapes.")
     if available_pairs_per_bin_matrix.ndim != 3:
         raise ValueError("Candidate pair and score matrices must be 3-dimensional.")
+    if len(fingerprints) != len(inchikeys14_unique):
+        raise ValueError("Fingerprint count must match InChIKey count.")
 
     shape = tuple(int(x) for x in available_pairs_per_bin_matrix.shape)
-    arrays = {"shape": np.asarray(shape, dtype=np.int64)}
+    arrays = {
+        "shape": np.asarray(shape, dtype=np.int64),
+        "fingerprints": np.asarray(fingerprints),
+    }
 
     for bin_index in range(shape[0]):
         pair_bin = available_pairs_per_bin_matrix[bin_index]
@@ -328,6 +334,7 @@ def load_candidate_pair_data(folder: str | Path):
         pair_matrix = np.full(shape, -1, dtype=np.int32)
         score_matrix = np.zeros(shape, dtype=np.float32)
         slot_numbers = np.arange(shape[2])[None, :]
+        fingerprints = data.get("fingerprints")
 
         for bin_index in range(shape[0]):
             indptr = data[f"bin_{bin_index}_indptr"]
@@ -349,4 +356,8 @@ def load_candidate_pair_data(folder: str | Path):
         raise ValueError(
             f"Stored candidate InChIKey count ({len(inchikeys)}) does not match candidate matrix rows ({shape[1]})."
         )
-    return pair_matrix, score_matrix, inchikeys
+    if not fingerprints is None and len(fingerprints) != len(inchikeys):
+        raise ValueError(
+            f"Stored fingerprint count ({len(fingerprints)}) does not match InChIKey count ({len(inchikeys)})."
+        )
+    return pair_matrix, score_matrix, inchikeys, fingerprints
