@@ -165,7 +165,7 @@ def train_nlet_ms2deepscore_wrapper(
                     positive_validation_spectra=positive_validation_spectra,
                     negative_validation_spectra=negative_validation_spectra,
                     fingerprint_type=settings.fingerprint_type,
-                    fingerprint_nbits=settings.fingerprint_nbits,
+                    n_bits_fingerprint=settings.fingerprint_nbits,
                 )
 
                 create_plots_between_ionmodes(

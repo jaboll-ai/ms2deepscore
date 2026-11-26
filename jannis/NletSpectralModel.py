@@ -1,3 +1,4 @@
+from time import perf_counter
 from typing import Optional
 
 import numpy as np
@@ -124,7 +125,14 @@ def train_nlet(
     epochs_no_improve = 0
 
     try:
+        # Ten Tanimoto bins, ordered from 0 to 1.
+        similarity_edges = np.linspace(0.0, 1.0, 11)
+
+        # Counts accumulated throughout this training run.
+        cumulative_pair_counts = np.zeros(10, dtype=np.int64)
+        training_start = perf_counter()
         for epoch in range(num_epochs):
+            epoch_start = perf_counter()
             model.train(True)
 
             batch_losses = []
@@ -134,6 +142,31 @@ def train_nlet(
                 spectra = spectra.to(device)
                 metadata = metadata.to(device)
                 targets = targets.to(device)
+                # The anchor is always at index 0.
+                # Remove it to retain only partner–partner similarities.
+                partner_targets = targets[:, 1:, 1:]
+
+                # Extract unique pairs, excluding the diagonal.
+                i, j = torch.triu_indices(
+                    partner_targets.shape[1],
+                    partner_targets.shape[2],
+                    offset=1,
+                    device=device,
+                )
+
+                indirect_similarities = partner_targets[:, i, j]
+
+                # Count the similarities in ten Tanimoto bins.
+                batch_counts = torch.histc(
+                    indirect_similarities.float(),
+                    bins=10,
+                    min=0.0,
+                    max=1.0,
+                )
+
+                cumulative_pair_counts += (
+                    batch_counts.cpu().numpy().astype(np.int64)
+                )
 
                 optimizer.zero_grad()
 
@@ -242,8 +275,26 @@ def train_nlet(
                 else:
                     epochs_no_improve += 1
 
-            trackio.log(metrics, step=epoch + 1)
+            metrics["time/epoch_seconds"] = perf_counter() - epoch_start
+            metrics["time/total_minutes"] = (perf_counter() - training_start) / 60
+            # Cumulative distribution of indirect Tanimoto similarities.
+            metrics["sampling/indirect_tanimoto"] = trackio.Histogram(
+                np_histogram=(
+                    cumulative_pair_counts.copy(),
+                    similarity_edges,
+                )
+            )
 
+            # Log percentages as ordinary scalar metrics too.
+            total = cumulative_pair_counts.sum()
+
+            if total > 0:
+                for bin_idx in range(10):
+                    metrics[f"sampling/bin_{bin_idx}_pct"] = (
+                        100.0 * cumulative_pair_counts[bin_idx] / total
+                    )
+
+            trackio.log(metrics, step=epoch + 1)
             if (
                 validation_loss_calculator is not None
                 and early_stopping

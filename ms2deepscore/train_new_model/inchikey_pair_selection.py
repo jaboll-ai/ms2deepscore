@@ -70,7 +70,7 @@ def create_spectrum_pair_generator(
 
     if pair_folder is not None and candidate_available:
         print(f"Loading candidate pair/score data from {pair_folder}")
-        available_pairs_per_bin_matrix, available_scores_per_bin_matrix, inchikeys14_unique = (
+        available_pairs_per_bin_matrix, available_scores_per_bin_matrix, inchikeys14_unique, fingerprints = (
             load_candidate_pair_data(pair_folder)
         )
     else:
@@ -96,7 +96,7 @@ def create_spectrum_pair_generator(
                 pair_folder,
                 available_pairs_per_bin_matrix,
                 available_scores_per_bin_matrix,
-                inchikeys14_unique,
+                inchikeys14_unique, fingerprints
             )
 
     if len(inchikeys14_unique) < settings.batch_size:
